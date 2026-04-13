@@ -950,6 +950,8 @@ export async function setupWavedashSDK(): Promise<WavedashSDK> {
     .WavedashJS;
   if (existing) return existing;
 
+  iframeMessenger.registerEventHandlers();
+
   const sdkConfig = await iframeMessenger.requestFromParent(
     IFRAME_MESSAGE_TYPE.GET_SDK_CONFIG
   );
@@ -960,3 +962,4 @@ export async function setupWavedashSDK(): Promise<WavedashSDK> {
 
   return sdk;
 }
+
