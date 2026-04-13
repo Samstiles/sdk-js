@@ -944,8 +944,12 @@ export { AVATAR_SIZE_SMALL, AVATAR_SIZE_MEDIUM, AVATAR_SIZE_LARGE };
 // Re-export all types and constants
 export * from "./types";
 
-// Type-safe initialization helper
+// Type-safe initialization helper (idempotent — safe to call more than once)
 export async function setupWavedashSDK(): Promise<WavedashSDK> {
+  const existing = (window as unknown as { WavedashJS?: WavedashSDK })
+    .WavedashJS;
+  if (existing) return existing;
+
   const sdkConfig = await iframeMessenger.requestFromParent(
     IFRAME_MESSAGE_TYPE.GET_SDK_CONFIG
   );
