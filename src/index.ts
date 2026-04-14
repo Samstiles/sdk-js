@@ -147,6 +147,7 @@ class WavedashSDK extends EventTarget {
   // =============
 
   init(config?: WavedashConfig): boolean {
+    this.loadComplete();
     if (this._initialized) {
       this.logger.warn("init called twice! Already initialized, skipping init");
       return false;
@@ -214,6 +215,7 @@ class WavedashSDK extends EventTarget {
   }
 
   loadComplete() {
+    if (this.gameFinishedLoading) return;
     this.gameFinishedLoading = true;
     this.heartbeatManager.start();
     iframeMessenger.postToParent(IFRAME_MESSAGE_TYPE.LOADING_COMPLETE, {});
