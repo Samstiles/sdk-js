@@ -76,6 +76,15 @@ export class FriendsManager {
     });
   }
 
+  /**
+   * Returns the cached username for a given user ID
+   * @param userId - The user ID to get the username for
+   * @returns The username, or null if user not cached
+   */
+  getUsername(userId: Id<"users">): string | null {
+    return this.userCache.get(userId)?.username ?? null;
+  }
+
   async listFriends(): Promise<Friend[]> {
     const friends = await this.sdk.convexClient.query(
       api.sdk.friends.listFriends,

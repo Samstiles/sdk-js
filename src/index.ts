@@ -239,8 +239,19 @@ class WavedashSDK extends EventTarget {
     return this.formatResponse(this.wavedashUser);
   }
 
-  getUsername(): string {
-    return this.wavedashUser.username;
+  /**
+   * Get a username. Returns the logged in user's username if no ID is passed.
+   * This can only return a username for a user the game has already interacted with, either via listFriends() or shared lobby membership.
+   * @param userId - Optional user ID to look up. If omitted, returns the current user's username.
+   * @returns The username, or null if a userId was passed but the user has not been seen by the game yet.
+   */
+  getUsername(): string;
+  getUsername(userId: Id<"users">): string | null;
+  getUsername(userId?: Id<"users">): string | null {
+    if (userId === undefined) {
+      return this.wavedashUser.username;
+    }
+    return this.friendsManager.getUsername(userId);
   }
 
   getUserId(): Id<"users"> {
