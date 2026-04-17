@@ -55,7 +55,8 @@ import {
   GAME_ENGINE,
   IFRAME_MESSAGE_TYPE,
   SDKConfig,
-  SDKUser
+  SDKUser,
+  UrlParams
 } from "@wvdsh/types";
 import { parentOrigin } from "./utils/parentOrigin";
 
@@ -114,10 +115,7 @@ class WavedashSDK extends EventTarget {
     this.p2pManager = new P2PManager(this);
     this.lobbyManager = new LobbyManager(this);
     this.statsManager = new StatsManager(this);
-    this.heartbeatManager = new HeartbeatManager(
-      this,
-      sdkConfig.deviceFingerprint
-    );
+    this.heartbeatManager = new HeartbeatManager(this);
     this.fileSystemManager = new FileSystemManager(this);
     this.ugcManager = new UGCManager(this);
     this.leaderboardManager = new LeaderboardManager(this);
@@ -135,11 +133,8 @@ class WavedashSDK extends EventTarget {
     ]);
 
     this.setupSessionEndListeners();
-
-    // TODO: Remove cast once @wvdsh/types is updated with launchParams on SDKConfig
-    this.launchParams =
-      (sdkConfig as SDKConfig & { launchParams?: Record<string, string> })
-        .launchParams ?? {};
+    
+    this.launchParams = sdkConfig.launchParams ?? {};
   }
 
   // =============
@@ -957,17 +952,37 @@ export { AVATAR_SIZE_SMALL, AVATAR_SIZE_MEDIUM, AVATAR_SIZE_LARGE };
 // Re-export all types and constants
 export * from "./types";
 
-// Type-safe initialization helper (idempotent — safe to call more than once)
-export async function setupWavedashSDK(): Promise<WavedashSDK> {
+// Type-safe initialization helper (idempotent — safe to call more than once).
+//
+// Synchronous: the parent frame passes the full SDKConfig via URL query param
+// (UrlParams.SdkConfig) so the SDK can be constructed without a postMessage
+// round-trip. Games do `await window.WavedashJS` today; awaiting a non-thenable
+// just returns the value, so existing callers keep working.
+export function setupWavedashSDK(): WavedashSDK {
   const existing = (window as unknown as { WavedashJS?: WavedashSDK })
     .WavedashJS;
   if (existing) return existing;
 
   iframeMessenger.registerEventHandlers();
 
-  const sdkConfig = await iframeMessenger.requestFromParent(
-    IFRAME_MESSAGE_TYPE.GET_SDK_CONFIG
+  const raw = new URLSearchParams(window.location.search).get(
+    UrlParams.SdkConfig
   );
+  if (!raw) {
+    throw new Error(
+      `Wavedash SDK: missing ?${UrlParams.SdkConfig}= query param on the iframe URL.`
+    );
+  }
+
+  let sdkConfig: SDKConfig;
+  try {
+    sdkConfig = JSON.parse(raw) as SDKConfig;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Wavedash SDK: failed to parse ?${UrlParams.SdkConfig}= as JSON: ${message}`
+    );
+  }
 
   const sdk = new WavedashSDK(sdkConfig);
 
