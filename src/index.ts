@@ -108,7 +108,7 @@ class WavedashSDK extends EventTarget {
     this.convexClient.setAuth(() => this.getAuthToken());
     this.convexHttpUrl = sdkConfig.convexHttpUrl;
     this.wavedashUser = sdkConfig.wavedashUser;
-
+    this.iframeMessenger = iframeMessenger;
     this.ugcHost = sdkConfig.ugcHost;
     this.uploadsHost = sdkConfig.uploadsHost;
     this.logger = new WavedashLogger();
@@ -121,7 +121,6 @@ class WavedashSDK extends EventTarget {
     this.leaderboardManager = new LeaderboardManager(this);
     this.friendsManager = new FriendsManager(this);
     this.gameEventManager = new GameEventManager(this);
-    this.iframeMessenger = iframeMessenger;
 
     // Cache current user for avatar lookups
     this.friendsManager.cacheUsers([
