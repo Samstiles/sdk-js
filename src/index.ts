@@ -54,11 +54,30 @@ import type {
 import {
   GAME_ENGINE,
   IFRAME_MESSAGE_TYPE,
+  LEADERBOARD_DISPLAY_TYPE,
+  LEADERBOARD_SORT_ORDER,
+  LOBBY_VISIBILITY,
   SDKConfig,
   SDKUser,
+  UGC_TYPE,
+  UGC_VISIBILITY,
   UrlParams
 } from "@wvdsh/types";
 import { parentOrigin } from "./utils/parentOrigin";
+import {
+  type ArgSpec,
+  validateArgs,
+  vBoolean,
+  vEnum,
+  vId,
+  vNull,
+  vNumber,
+  vOptional,
+  vRecord,
+  vString,
+  vUint8Array,
+  vUnion
+} from "./utils/validation";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => any;
@@ -191,6 +210,7 @@ class WavedashSDK extends EventTarget {
   // Entrypoint Helpers
   // ==================
   loadScript(src: string) {
+    validateArgs("loadScript", [["src", vString]], [src]);
     return new Promise((resolve, reject) => {
       const script = document.createElement("script");
       script.type = "text/javascript";
@@ -203,6 +223,11 @@ class WavedashSDK extends EventTarget {
   }
 
   updateLoadProgressZeroToOne(progress: number) {
+    validateArgs(
+      "updateLoadProgressZeroToOne",
+      [["progress", vNumber]],
+      [progress]
+    );
     iframeMessenger.postToParent(IFRAME_MESSAGE_TYPE.PROGRESS_UPDATE, {
       progress
     });
@@ -245,6 +270,7 @@ class WavedashSDK extends EventTarget {
     if (userId === undefined) {
       return this.wavedashUser.username;
     }
+    validateArgs("getUsername", [["userId", vId("users")]], [userId]);
     return this.friendsManager.getUsername(userId);
   }
 
@@ -266,7 +292,7 @@ class WavedashSDK extends EventTarget {
   // ============
 
   async listFriends(): Promise<WavedashResponse<Friend[]>> {
-    return this.apiCall(this.friendsManager, "listFriends");
+    return this.apiCall(this.friendsManager, "listFriends", []);
   }
 
   /**
@@ -283,6 +309,10 @@ class WavedashSDK extends EventTarget {
     return this.apiCallSync(
       this.friendsManager,
       "getUserAvatarUrl",
+      [
+        ["userId", vId("users")],
+        ["size", vNumber]
+      ],
       userId,
       size
     );
@@ -293,7 +323,12 @@ class WavedashSDK extends EventTarget {
   // ============
 
   async getLeaderboard(name: string): Promise<WavedashResponse<Leaderboard>> {
-    return this.apiCall(this.leaderboardManager, "getLeaderboard", name);
+    return this.apiCall(
+      this.leaderboardManager,
+      "getLeaderboard",
+      [["name", vString]],
+      name
+    );
   }
 
   async getOrCreateLeaderboard(
@@ -304,6 +339,14 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.leaderboardManager,
       "getOrCreateLeaderboard",
+      [
+        ["name", vString],
+        ["sortOrder", vEnum(LEADERBOARD_SORT_ORDER, "LeaderboardSortOrder")],
+        [
+          "displayType",
+          vEnum(LEADERBOARD_DISPLAY_TYPE, "LeaderboardDisplayType")
+        ]
+      ],
       name,
       sortOrder,
       displayType
@@ -315,6 +358,7 @@ class WavedashSDK extends EventTarget {
     return this.apiCallSync(
       this.leaderboardManager,
       "getLeaderboardEntryCount",
+      [["leaderboardId", vId("leaderboards")]],
       leaderboardId
     );
   }
@@ -327,6 +371,7 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.leaderboardManager,
       "getMyLeaderboardEntries",
+      [["leaderboardId", vId("leaderboards")]],
       leaderboardId
     );
   }
@@ -340,6 +385,12 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.leaderboardManager,
       "listLeaderboardEntriesAroundUser",
+      [
+        ["leaderboardId", vId("leaderboards")],
+        ["countAhead", vNumber],
+        ["countBehind", vNumber],
+        ["friendsOnly", vBoolean]
+      ],
       leaderboardId,
       countAhead,
       countBehind,
@@ -356,6 +407,12 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.leaderboardManager,
       "listLeaderboardEntries",
+      [
+        ["leaderboardId", vId("leaderboards")],
+        ["offset", vNumber],
+        ["limit", vNumber],
+        ["friendsOnly", vBoolean]
+      ],
       leaderboardId,
       offset,
       limit,
@@ -372,6 +429,12 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.leaderboardManager,
       "uploadLeaderboardScore",
+      [
+        ["leaderboardId", vId("leaderboards")],
+        ["score", vNumber],
+        ["keepBest", vBoolean],
+        ["ugcId", vOptional(vId("userGeneratedContent"))]
+      ],
       leaderboardId,
       score,
       keepBest,
@@ -402,6 +465,13 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.ugcManager,
       "createUGCItem",
+      [
+        ["ugcType", vEnum(UGC_TYPE, "UGCType")],
+        ["title", vOptional(vString)],
+        ["description", vOptional(vString)],
+        ["visibility", vOptional(vEnum(UGC_VISIBILITY, "UGCVisibility"))],
+        ["filePath", vOptional(vString)]
+      ],
       ugcType,
       title,
       description,
@@ -430,6 +500,13 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.ugcManager,
       "updateUGCItem",
+      [
+        ["ugcId", vId("userGeneratedContent")],
+        ["title", vOptional(vString)],
+        ["description", vOptional(vString)],
+        ["visibility", vOptional(vEnum(UGC_VISIBILITY, "UGCVisibility"))],
+        ["filePath", vOptional(vString)]
+      ],
       ugcId,
       title,
       description,
@@ -442,7 +519,16 @@ class WavedashSDK extends EventTarget {
     ugcId: Id<"userGeneratedContent">,
     filePath: string
   ): Promise<WavedashResponse<Id<"userGeneratedContent">>> {
-    return this.apiCall(this.ugcManager, "downloadUGCItem", ugcId, filePath);
+    return this.apiCall(
+      this.ugcManager,
+      "downloadUGCItem",
+      [
+        ["ugcId", vId("userGeneratedContent")],
+        ["filePath", vString]
+      ],
+      ugcId,
+      filePath
+    );
   }
 
   // ================================
@@ -455,7 +541,12 @@ class WavedashSDK extends EventTarget {
    * @returns The path of the remote file that was deleted
    */
   async deleteRemoteFile(filePath: string): Promise<WavedashResponse<string>> {
-    return this.apiCall(this.fileSystemManager, "deleteRemoteFile", filePath);
+    return this.apiCall(
+      this.fileSystemManager,
+      "deleteRemoteFile",
+      [["filePath", vString]],
+      filePath
+    );
   }
 
   /**
@@ -467,7 +558,12 @@ class WavedashSDK extends EventTarget {
   async downloadRemoteFile(
     filePath: string
   ): Promise<WavedashResponse<string>> {
-    return this.apiCall(this.fileSystemManager, "downloadRemoteFile", filePath);
+    return this.apiCall(
+      this.fileSystemManager,
+      "downloadRemoteFile",
+      [["filePath", vString]],
+      filePath
+    );
   }
 
   /**
@@ -477,7 +573,12 @@ class WavedashSDK extends EventTarget {
    * @returns The path of the remote file that the local file was uploaded to
    */
   async uploadRemoteFile(filePath: string): Promise<WavedashResponse<string>> {
-    return this.apiCall(this.fileSystemManager, "uploadRemoteFile", filePath);
+    return this.apiCall(
+      this.fileSystemManager,
+      "uploadRemoteFile",
+      [["filePath", vString]],
+      filePath
+    );
   }
 
   /**
@@ -488,7 +589,12 @@ class WavedashSDK extends EventTarget {
   async listRemoteDirectory(
     path: string
   ): Promise<WavedashResponse<RemoteFileMetadata[]>> {
-    return this.apiCall(this.fileSystemManager, "listRemoteDirectory", path);
+    return this.apiCall(
+      this.fileSystemManager,
+      "listRemoteDirectory",
+      [["path", vString]],
+      path
+    );
   }
 
   /**
@@ -502,6 +608,7 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.fileSystemManager,
       "downloadRemoteDirectory",
+      [["path", vString]],
       path
     );
   }
@@ -515,6 +622,14 @@ class WavedashSDK extends EventTarget {
    * @returns true if the file was written successfully
    */
   async writeLocalFile(filePath: string, data: Uint8Array): Promise<boolean> {
+    validateArgs(
+      "writeLocalFile",
+      [
+        ["filePath", vString],
+        ["data", vUint8Array]
+      ],
+      [filePath, data]
+    );
     const result = await this.fileSystemManager.writeLocalFile(filePath, data);
     return result;
   }
@@ -527,6 +642,7 @@ class WavedashSDK extends EventTarget {
    * @returns The data read from the local file (byte array)
    */
   async readLocalFile(filePath: string): Promise<Uint8Array | null> {
+    validateArgs("readLocalFile", [["filePath", vString]], [filePath]);
     const result = await this.fileSystemManager.readLocalFile(filePath);
     return result;
   }
@@ -535,22 +651,52 @@ class WavedashSDK extends EventTarget {
   // Achievements + Stats
   // ============
   getAchievement(identifier: string): boolean {
-    return this.apiCallSync(this.statsManager, "getAchievement", identifier);
+    return this.apiCallSync(
+      this.statsManager,
+      "getAchievement",
+      [["identifier", vString]],
+      identifier
+    );
   }
   getStat(identifier: string): number {
-    return this.apiCallSync(this.statsManager, "getStat", identifier);
+    return this.apiCallSync(
+      this.statsManager,
+      "getStat",
+      [["identifier", vString]],
+      identifier
+    );
   }
   setAchievement(identifier: string, storeNow: boolean = false): boolean {
-    return this.apiCallSync(this.statsManager, "setAchievement", identifier, storeNow);
+    return this.apiCallSync(
+      this.statsManager,
+      "setAchievement",
+      [
+        ["identifier", vString],
+        ["storeNow", vBoolean]
+      ],
+      identifier,
+      storeNow
+    );
   }
   setStat(identifier: string, value: number, storeNow: boolean = false): boolean {
-    return this.apiCallSync(this.statsManager, "setStat", identifier, value, storeNow);
+    return this.apiCallSync(
+      this.statsManager,
+      "setStat",
+      [
+        ["identifier", vString],
+        ["value", vNumber],
+        ["storeNow", vBoolean]
+      ],
+      identifier,
+      value,
+      storeNow
+    );
   }
   async requestStats(): Promise<WavedashResponse<boolean>> {
-    return this.apiCall(this.statsManager, "requestStats");
+    return this.apiCall(this.statsManager, "requestStats", []);
   }
   storeStats(): boolean {
-    return this.apiCallSync(this.statsManager, "storeStats");
+    return this.apiCallSync(this.statsManager, "storeStats", []);
   }
 
   // ============
@@ -563,7 +709,7 @@ class WavedashSDK extends EventTarget {
    */
   getP2PMaxPayloadSize(): number {
     this.ensureInit();
-    return this.apiCallSync(this.p2pManager, "getMaxPayloadSize");
+    return this.apiCallSync(this.p2pManager, "getMaxPayloadSize", []);
   }
 
   /**
@@ -571,7 +717,7 @@ class WavedashSDK extends EventTarget {
    */
   getP2PMaxIncomingMessages(): number {
     this.ensureInit();
-    return this.apiCallSync(this.p2pManager, "getMaxIncomingMessages");
+    return this.apiCallSync(this.p2pManager, "getMaxIncomingMessages", []);
   }
 
   /**
@@ -580,7 +726,7 @@ class WavedashSDK extends EventTarget {
    */
   getP2POutgoingMessageBuffer(): Uint8Array {
     this.ensureInit();
-    return this.apiCallSync(this.p2pManager, "getOutgoingMessageBuffer");
+    return this.apiCallSync(this.p2pManager, "getOutgoingMessageBuffer", []);
   }
 
   /**
@@ -692,6 +838,10 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.lobbyManager,
       "createLobby",
+      [
+        ["visibility", vEnum(LOBBY_VISIBILITY, "LobbyVisibility")],
+        ["maxPlayers", vOptional(vNumber)]
+      ],
       visibility,
       maxPlayers
     );
@@ -705,35 +855,74 @@ class WavedashSDK extends EventTarget {
    * @emits LobbyJoined event on success with full lobby context
    */
   async joinLobby(lobbyId: Id<"lobbies">): Promise<WavedashResponse<boolean>> {
-    return this.apiCall(this.lobbyManager, "joinLobby", lobbyId);
+    return this.apiCall(
+      this.lobbyManager,
+      "joinLobby",
+      [["lobbyId", vId("lobbies")]],
+      lobbyId
+    );
   }
 
   async listAvailableLobbies(
     friendsOnly: boolean = false
   ): Promise<WavedashResponse<Lobby[]>> {
-    return this.apiCall(this.lobbyManager, "listAvailableLobbies", friendsOnly);
+    return this.apiCall(
+      this.lobbyManager,
+      "listAvailableLobbies",
+      [["friendsOnly", vBoolean]],
+      friendsOnly
+    );
   }
 
   getLobbyUsers(lobbyId: Id<"lobbies">): LobbyUser[] {
-    return this.apiCallSync(this.lobbyManager, "getLobbyUsers", lobbyId);
+    return this.apiCallSync(
+      this.lobbyManager,
+      "getLobbyUsers",
+      [["lobbyId", vId("lobbies")]],
+      lobbyId
+    );
   }
 
   getNumLobbyUsers(lobbyId: Id<"lobbies">): number {
-    return this.apiCallSync(this.lobbyManager, "getNumLobbyUsers", lobbyId);
+    return this.apiCallSync(
+      this.lobbyManager,
+      "getNumLobbyUsers",
+      [["lobbyId", vId("lobbies")]],
+      lobbyId
+    );
   }
 
   getLobbyHostId(lobbyId: Id<"lobbies">): Id<"users"> | null {
-    return this.apiCallSync(this.lobbyManager, "getHostId", lobbyId);
+    return this.apiCallSync(
+      this.lobbyManager,
+      "getHostId",
+      [["lobbyId", vId("lobbies")]],
+      lobbyId
+    );
   }
 
   getLobbyData(lobbyId: Id<"lobbies">, key: string): string | number | boolean | null {
-    return this.apiCallSync(this.lobbyManager, "getLobbyData", lobbyId, key);
+    return this.apiCallSync(
+      this.lobbyManager,
+      "getLobbyData",
+      [
+        ["lobbyId", vId("lobbies")],
+        ["key", vString]
+      ],
+      lobbyId,
+      key
+    );
   }
 
   setLobbyData(lobbyId: Id<"lobbies">, key: string, value: string | number | null): boolean {
     return this.apiCallSync(
       this.lobbyManager,
       "setLobbyData",
+      [
+        ["lobbyId", vId("lobbies")],
+        ["key", vString],
+        ["value", vUnion<string | number | null>(vString, vNumber, vNull)]
+      ],
       lobbyId,
       key,
       value
@@ -741,13 +930,27 @@ class WavedashSDK extends EventTarget {
   }
 
   deleteLobbyData(lobbyId: Id<"lobbies">, key: string): boolean {
-    return this.apiCallSync(this.lobbyManager, "deleteLobbyData", lobbyId, key);
+    return this.apiCallSync(
+      this.lobbyManager,
+      "deleteLobbyData",
+      [
+        ["lobbyId", vId("lobbies")],
+        ["key", vString]
+      ],
+      lobbyId,
+      key
+    );
   }
 
   async leaveLobby(
     lobbyId: Id<"lobbies">
   ): Promise<WavedashResponse<Id<"lobbies">>> {
-    return this.apiCall(this.lobbyManager, "leaveLobby", lobbyId);
+    return this.apiCall(
+      this.lobbyManager,
+      "leaveLobby",
+      [["lobbyId", vId("lobbies")]],
+      lobbyId
+    );
   }
 
   // Fire and forget, returns true if the message was sent out successfully
@@ -756,6 +959,10 @@ class WavedashSDK extends EventTarget {
     return this.apiCallSync(
       this.lobbyManager,
       "sendLobbyMessage",
+      [
+        ["lobbyId", vId("lobbies")],
+        ["message", vString]
+      ],
       lobbyId,
       message
     );
@@ -768,6 +975,10 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.lobbyManager,
       "inviteUserToLobby",
+      [
+        ["lobbyId", vId("lobbies")],
+        ["userId", vId("users")]
+      ],
       lobbyId,
       userId
     );
@@ -779,6 +990,7 @@ class WavedashSDK extends EventTarget {
     return this.apiCall(
       this.lobbyManager,
       "getLobbyInviteLink",
+      [["copyToClipboard", vBoolean]],
       copyToClipboard
     );
   }
@@ -795,7 +1007,12 @@ class WavedashSDK extends EventTarget {
   async updateUserPresence(
     data?: Record<string, unknown>
   ): Promise<WavedashResponse<boolean>> {
-    return this.apiCall(this.heartbeatManager, "updateUserPresence", data);
+    return this.apiCall(
+      this.heartbeatManager,
+      "updateUserPresence",
+      [["data", vOptional(vRecord)]],
+      data
+    );
   }
 
   // ================
@@ -837,10 +1054,12 @@ class WavedashSDK extends EventTarget {
   private async apiCall<T extends WavedashService, K extends string & keyof T>(
     manager: T,
     method: K,
+    argSpecs: readonly ArgSpec[],
     ...args: Parameters<Extract<T[K], AnyFn>>
   ): Promise<WavedashResponse<Awaited<ReturnType<Extract<T[K], AnyFn>>>>> {
     this.logger.debug(method, ...args);
     try {
+      validateArgs(method, argSpecs, args);
       const data = await (manager[method] as AnyFn)(...args);
       return this.formatResponse({ success: true, data });
     } catch (error) {
@@ -853,9 +1072,20 @@ class WavedashSDK extends EventTarget {
   private apiCallSync<T extends WavedashService, K extends string & keyof T>(
     target: T,
     method: K,
+    argSpecs: readonly ArgSpec[],
     ...args: Parameters<Extract<T[K], AnyFn>>
   ): ReturnType<Extract<T[K], AnyFn>> {
     this.logger.debug(method, ...args);
+    // Validation errors rethrow — sync callsites don't have a WavedashResponse
+    // envelope to surface them through. The logger.error makes the cause
+    // obvious in the browser console before the throw propagates.
+    try {
+      validateArgs(method, argSpecs, args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(method, message);
+      throw error;
+    }
     return this.formatResponse((target[method] as AnyFn)(...args));
   }
 
@@ -986,6 +1216,7 @@ export function setupWavedashSDK(): WavedashSDK {
   const sdk = new WavedashSDK(sdkConfig);
 
   (window as unknown as { WavedashJS: WavedashSDK }).WavedashJS = sdk;
+  (window as unknown as { Wavedash: WavedashSDK }).Wavedash = sdk;
 
   return sdk;
 }
