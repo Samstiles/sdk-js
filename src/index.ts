@@ -1216,6 +1216,7 @@ export function setupWavedashSDK(): WavedashSDK {
   const sdk = new WavedashSDK(sdkConfig);
 
   (window as unknown as { WavedashJS: WavedashSDK }).WavedashJS = sdk;
+  (window as unknown as { Wavedash: WavedashSDK }).Wavedash = sdk;
 
   return sdk;
 }
