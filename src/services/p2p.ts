@@ -85,14 +85,31 @@ export class P2PManager {
   private readonly MAX_CHANNELS = 8; // Maximum number of channels to support
   private readonly DEFAULT_NUM_CHANNELS = 2; // Default number of channels to pre-allocate
 
-  // Binary message format offsets
+  // Binary message formats
+  //
+  // Wire format (what actually travels over the RTCDataChannel):
+  //   [channel(1)][payload(...)]
+  // Things NOT on the wire and why:
+  //   - fromUserId: inferred from the RTCDataChannel the bytes arrive on
+  //   - dataLength: WebRTC DataChannels preserve message boundaries, length can be inferred from payload size
+  //
+  // In-memory slot format (what the ring buffer + game engines consume):
+  //   [fromUserId(32)][channel(4)][dataLength(4)][payload(...)]
+  // On receive we prepend the authenticated peer userId and re-insert
+  // dataLength + a widened channel so engine-side decoders (Unity
+  // DecodeP2PPacket, Godot _decode_p2p_packet) stay byte-compatible.
   private readonly USERID_SIZE = 32; // TODO: Switch to int handles so this can be 4 bytes instead of 32
-  private readonly CHANNEL_SIZE = 4;
+  private readonly CHANNEL_SIZE = 4; // Slot-side channel width (engine decoders expect 4 bytes)
   private readonly DATALENGTH_SIZE = 4;
+  // In-memory slot offsets
   private readonly CHANNEL_OFFSET = this.USERID_SIZE; // Channel comes after fromUserId
   private readonly DATALENGTH_OFFSET = this.USERID_SIZE + this.CHANNEL_SIZE;
   private readonly PAYLOAD_OFFSET =
     this.USERID_SIZE + this.CHANNEL_SIZE + this.DATALENGTH_SIZE;
+  // Wire offsets (just a 1-byte channel header)
+  private readonly WIRE_CHANNEL_SIZE = 1;
+  private readonly WIRE_CHANNEL_OFFSET = 0;
+  private readonly WIRE_PAYLOAD_OFFSET = this.WIRE_CHANNEL_SIZE;
 
   // Limits for configurable sizing
   // 64KB - safe cross-browser WebRTC floor, avoids SCTP fragmentation
@@ -1045,8 +1062,8 @@ export class P2PManager {
     };
 
     channel.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      // Enqueue the raw binary data directly to queue
-      this.enqueueMessage(event.data);
+      // Enqueue message directly to its channel queue
+      this.enqueueMessage(event.data, remoteUserId);
     };
 
     channel.onerror = (error: RTCErrorEvent) => {
@@ -1129,12 +1146,7 @@ export class P2PManager {
           : payload;
 
       // Called with payload provided - encode it
-      const message: P2PMessage = {
-        fromUserId: this.sdk.getUserId(),
-        channel: appChannel,
-        payload: data
-      };
-      const messageData: Uint8Array = this.encodeBinaryMessage(message);
+      const messageData: Uint8Array = this.encodeWireMessage(appChannel, data);
 
       const channelMap = reliable
         ? this.reliableChannels
@@ -1341,16 +1353,19 @@ export class P2PManager {
     });
   }
 
-  private enqueueMessage(binaryData: ArrayBuffer): void {
+  private enqueueMessage(
+    wireData: ArrayBuffer,
+    fromUserId: Id<"users">
+  ): void {
     try {
-      // Extract channel from the binary data to determine which queue to use
-      if (binaryData.byteLength < this.CHANNEL_OFFSET + this.CHANNEL_SIZE) {
+      if (wireData.byteLength < this.WIRE_PAYLOAD_OFFSET) {
         this.sdk.logger.warn("Binary message too short to extract channel");
         return;
       }
 
-      const view = new DataView(binaryData);
-      const channel = view.getUint32(this.CHANNEL_OFFSET, true);
+      // Channel is 1 byte on the wire and widened to 4 bytes in the slot.
+      const wireBytes = new Uint8Array(wireData);
+      const channel = wireBytes[this.WIRE_CHANNEL_OFFSET];
 
       // Create channel queue if it doesn't exist
       if (!this.channelQueues.has(channel)) {
@@ -1373,17 +1388,20 @@ export class P2PManager {
         return;
       }
 
-      // Check if message fits in slot (after size prefix)
+      // Slot stores the "enriched" in-memory format so engine decoders can
+      // read fromUserId + dataLength inline
+      const payloadLength = wireData.byteLength - this.WIRE_PAYLOAD_OFFSET;
+      const storedSize = this.PAYLOAD_OFFSET + payloadLength;
       const maxMessageSize = this.MESSAGE_SIZE - this.MESSAGE_SLOT_HEADER_SIZE;
-      if (binaryData.byteLength > maxMessageSize) {
+      if (storedSize > maxMessageSize) {
         this.sdk.logger.warn(
-          `Message too large for queue: ${binaryData.byteLength} > ${maxMessageSize}, dropping message.`
+          `Message too large for queue: ${storedSize} > ${maxMessageSize}, dropping message.`
         );
         return;
       }
 
-      // Calculate write position in the data buffer
       const writeOffset = queue.writeIndex * this.MESSAGE_SIZE;
+      const slotContentOffset = writeOffset + this.MESSAGE_SLOT_HEADER_SIZE;
 
       // Write message size at the beginning of the slot
       const slotView = new DataView(
@@ -1391,16 +1409,43 @@ export class P2PManager {
         writeOffset,
         this.MESSAGE_SIZE
       );
-      slotView.setUint32(0, binaryData.byteLength, true);
+      slotView.setUint32(0, storedSize, true);
 
-      // Write raw binary message data (after size prefix)
-      const messageBytes = new Uint8Array(binaryData);
-      queue.incomingDataView.set(
-        messageBytes,
-        writeOffset + this.MESSAGE_SLOT_HEADER_SIZE
+      // Slot layout: [fromUserId(32)][channel(4)][dataLength(4)][payload].
+      // Prepend the authenticated fromUserId (32 bytes, zero-padded).
+      const fromUserIdBytes = this.textEncoder
+        .encode(fromUserId)
+        .slice(0, this.USERID_SIZE);
+      queue.incomingDataView.fill(
+        0,
+        slotContentOffset,
+        slotContentOffset + this.USERID_SIZE
+      );
+      queue.incomingDataView.set(fromUserIdBytes, slotContentOffset);
+
+      // Re-emit channel (already parsed from wire above) into the slot.
+      slotView.setUint32(
+        this.MESSAGE_SLOT_HEADER_SIZE + this.CHANNEL_OFFSET,
+        channel,
+        true
       );
 
-      // Update queue pointers
+      // Synthesize dataLength from the wire message size (SCTP gave us the
+      // boundary; engine decoders still want an explicit length field).
+      slotView.setUint32(
+        this.MESSAGE_SLOT_HEADER_SIZE + this.DATALENGTH_OFFSET,
+        payloadLength,
+        true
+      );
+
+      // Copy payload from wire into slot.
+      if (payloadLength > 0) {
+        queue.incomingDataView.set(
+          wireBytes.subarray(this.WIRE_PAYLOAD_OFFSET),
+          slotContentOffset + this.PAYLOAD_OFFSET
+        );
+      }
+
       queue.writeIndex = (queue.writeIndex + 1) % this.QUEUE_SIZE;
       queue.messageCount++;
     } catch (error) {
@@ -1573,34 +1618,21 @@ export class P2PManager {
   // Binary Message Encoding/Decoding
   // ================
 
-  private encodeBinaryMessage(message: P2PMessage): Uint8Array {
-    // Binary format: [fromUserId(32)][channel(4)][dataLength(4)][payload(...)]
-    const fromUserIdBytes = this.textEncoder
-      .encode(message.fromUserId)
-      .slice(0, this.USERID_SIZE);
-    const payloadBytes = message.payload;
-
-    const totalLength = this.PAYLOAD_OFFSET + payloadBytes.length;
+  // Wire format: [channel(1)][payload(...)] (no userId, no dataLength)
+  private encodeWireMessage(channel: number, payload: Uint8Array): Uint8Array {
+    // Confirm channel fits in 1 byte
+    if (channel < 0 || channel > 255) {
+      throw new Error(
+        `P2P channel ${channel} must be between 0 and 255`
+      );
+    }
+    const totalLength = this.WIRE_PAYLOAD_OFFSET + payload.length;
     const uint8View = new Uint8Array(totalLength);
-    const view = new DataView(uint8View.buffer);
 
-    let offset = 0;
+    uint8View[this.WIRE_CHANNEL_OFFSET] = channel;
 
-    // fromUserId (32 bytes, padded with zeros)
-    uint8View.set(fromUserIdBytes, offset);
-    offset += this.USERID_SIZE;
-
-    // channel (4 bytes)
-    view.setUint32(offset, message.channel, true);
-    offset += this.CHANNEL_SIZE;
-
-    // data length (4 bytes)
-    view.setUint32(offset, payloadBytes.length, true);
-    offset += this.DATALENGTH_SIZE;
-
-    // payload (variable length)
-    if (payloadBytes.length > 0) {
-      uint8View.set(payloadBytes, offset);
+    if (payload.length > 0) {
+      uint8View.set(payload, this.WIRE_PAYLOAD_OFFSET);
     }
 
     return uint8View;
