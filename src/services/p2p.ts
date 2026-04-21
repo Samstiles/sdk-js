@@ -1614,10 +1614,10 @@ export class P2PManager {
 
   // Wire format: [channel(1)][payload(...)] (no userId, no dataLength)
   private encodeWireMessage(channel: number, payload: Uint8Array): Uint8Array {
-    // Confirm channel fits in 1 byte
-    if (channel < 0 || channel > 255) {
+    // Confirm channel is valid
+    if (channel < 0 || channel >= this.MAX_CHANNELS) {
       throw new Error(
-        `P2P channel ${channel} must be between 0 and 255`
+        `P2P channel ${channel} must be between 0 and ${this.MAX_CHANNELS - 1}`
       );
     }
     const totalLength = this.WIRE_PAYLOAD_OFFSET + payload.length;
