@@ -901,7 +901,7 @@ class WavedashSDK extends EventTarget {
     );
   }
 
-  getLobbyData(lobbyId: Id<"lobbies">, key: string): string | number | boolean | null {
+  getLobbyData(lobbyId: Id<"lobbies">, key: string): string | number | null {
     return this.apiCallSync(
       this.lobbyManager,
       "getLobbyData",
