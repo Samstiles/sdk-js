@@ -83,7 +83,6 @@ export class P2PManager {
 
   private readonly MESSAGE_SLOT_HEADER_SIZE = 4; // Size prefix at start of each message slot
   private readonly MAX_CHANNELS = 8; // Maximum number of channels to support
-  private readonly DEFAULT_NUM_CHANNELS = 2; // Default number of channels to pre-allocate
 
   // Binary message formats
   //
@@ -171,18 +170,20 @@ export class P2PManager {
       this.MESSAGE_SIZE - this.MESSAGE_SLOT_HEADER_SIZE - this.PAYLOAD_OFFSET;
     this.outgoingMessageBuffer = new Uint8Array(this.MAX_PAYLOAD_SIZE);
 
-    // Warn if total memory usage is high
-    const numChannels = this.DEFAULT_NUM_CHANNELS;
-    const totalMemory = this.MESSAGE_SIZE * this.QUEUE_SIZE * numChannels;
-    if (totalMemory > P2PManager.MEMORY_WARNING_THRESHOLD_BYTES) {
+    // Ring buffers are allocated lazily per channel on first receive (see
+    // createChannelQueue), so games that don't use P2P pay nothing here.
+    // Warn about worst-case footprint if all channels end up in use.
+    const worstCaseMemory =
+      this.MESSAGE_SIZE * this.QUEUE_SIZE * this.MAX_CHANNELS;
+    if (worstCaseMemory > P2PManager.MEMORY_WARNING_THRESHOLD_BYTES) {
       console.warn(
-        `P2P ring buffer memory usage is ${(totalMemory / 1024 / 1024).toFixed(1)}MB ` +
-          `(messageSize=${this.MESSAGE_SIZE} × maxIncomingMessages=${this.QUEUE_SIZE} × ${numChannels} channels). ` +
+        `P2P ring buffer memory could reach ${(worstCaseMemory / 1024 / 1024).toFixed(1)}MB ` +
+          `if all ${this.MAX_CHANNELS} channels are used ` +
+          `(messageSize=${this.MESSAGE_SIZE} x maxIncomingMessages=${this.QUEUE_SIZE} per channel). ` +
           `Consider reducing maxIncomingMessages if memory is a concern.`
       );
     }
 
-    this.initializeMessageQueue();
     this.initialized = true;
   }
 
@@ -1323,23 +1324,11 @@ export class P2PManager {
   // Incoming Message Queues
   // ================
 
-  private initializeMessageQueue(): void {
-    try {
-      // Pre-create queues for common channels (0-3)
-      for (let channel = 0; channel < this.DEFAULT_NUM_CHANNELS; channel++) {
-        this.createChannelQueue(channel);
-      }
-
-      this.sdk.logger.debug(
-        `Initialized ${this.DEFAULT_NUM_CHANNELS} P2P message queues`
-      );
-    } catch (error) {
-      this.sdk.logger.warn("Failed to initialize P2P message queues:", error);
-    }
-  }
-
+  // Lazily allocate an incoming ring buffer for the given channel.
+  // Called from enqueueMessage when the first message arrives on a channel
+  // that hasn't been used yet — games that never receive P2P traffic (or
+  // only use a subset of channels) never pay for unused queues.
   private createChannelQueue(channel: number): void {
-    // Only incoming queue needed (P2P network → Game engine)
     const queueDataSize = this.MESSAGE_SIZE * this.QUEUE_SIZE;
     const buffer = new ArrayBuffer(queueDataSize);
     const incomingDataView = new Uint8Array(buffer);
@@ -1351,6 +1340,11 @@ export class P2PManager {
       messageCount: 0,
       incomingDataView
     });
+
+    this.sdk.logger.debug(
+      `Allocated P2P ring buffer for channel ${channel} ` +
+        `(${(queueDataSize / 1024 / 1024).toFixed(1)}MB)`
+    );
   }
 
   private enqueueMessage(
