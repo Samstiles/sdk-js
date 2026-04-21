@@ -279,6 +279,24 @@ class WavedashSDK extends EventTarget {
   }
 
   /**
+   * Get the current user's gameplay JWT, fetching it if not already cached.
+   * This should be used to authenticate requests to your game's own backend,
+   * if you have one.
+   * @returns The user's JWT signed by the Wavedash backend
+   */
+  async getUserJwt(): Promise<WavedashResponse<string>> {
+    this.logger.debug("getUserJwt");
+    try {
+      const data = this.gameplayJwt ?? (await this.getAuthToken());
+      return this.formatResponse({ success: true, data });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error("getUserJwt", message);
+      return this.formatResponse({ success: false, data: null, message });
+    }
+  }
+
+  /**
    * Get the key: value mapping of all URL query params present when the game was launched
    * lobby - The lobby ID to join if the user launched with the intention to join a lobby
    * @returns Dictionary of the URL query params that were present when the game was launched
