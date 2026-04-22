@@ -117,14 +117,19 @@ class WavedashSDK extends EventTarget {
   iframeMessenger: IFrameMessenger;
   p2pManager: P2PManager;
   gameplayJwt: string | null = null;
+  private gameplayJwtPromise: Promise<string> | null = null;
   ugcHost: string;
   uploadsHost: string;
 
   constructor(sdkConfig: SDKConfig) {
     super();
-    this.convexClient = new ConvexClient(sdkConfig.convexCloudUrl);
+    this.convexClient = new ConvexClient(sdkConfig.convexCloudUrl, {
+      expectAuth: true
+    });
     this.gameCloudId = sdkConfig.gameCloudId; // needs to be above getAuthToken don't move this
-    this.convexClient.setAuth(() => this.getAuthToken());
+    this.convexClient.setAuth(({ forceRefreshToken }) =>
+      this.getAuthToken(forceRefreshToken)
+    );
     this.convexHttpUrl = sdkConfig.convexHttpUrl;
     this.wavedashUser = sdkConfig.wavedashUser;
     this.iframeMessenger = iframeMessenger;
@@ -287,7 +292,7 @@ class WavedashSDK extends EventTarget {
   async getUserJwt(): Promise<WavedashResponse<string>> {
     this.logger.debug("getUserJwt");
     try {
-      const data = this.gameplayJwt ?? (await this.getAuthToken());
+      const data = await this.ensureGameplayJwt();
       return this.formatResponse({ success: true, data });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1118,18 +1123,52 @@ class WavedashSDK extends EventTarget {
     }
   }
 
-  private async getAuthToken(): Promise<string> {
-    const response = await fetch(
-      `${parentOrigin}/auth/gameplay_token/${this.gameCloudId}`,
-      {
-        credentials: "include"
-      }
-    );
-    if (!response.ok) {
-      throw new Error(`Failed to fetch gameplay token: ${response.status}`);
+  /**
+   * Fetches (or returns cached) gameplay JWT. Callers outside of Convex's
+   * setAuth should use {@link ensureGameplayJwt} instead; this method is the
+   * fetcher wired into `ConvexClient.setAuth` and honors `forceRefresh` so the
+   * server can invalidate a stale token.
+   *
+   * Concurrent callers share a single in-flight fetch to avoid duplicate
+   * requests to the parent's gameplay-token endpoint.
+   */
+  private getAuthToken(forceRefresh = false): Promise<string> {
+    if (!forceRefresh && this.gameplayJwt) {
+      return Promise.resolve(this.gameplayJwt);
     }
-    this.gameplayJwt = await response.text();
-    return this.gameplayJwt;
+    if (!forceRefresh && this.gameplayJwtPromise) {
+      return this.gameplayJwtPromise;
+    }
+
+    const promise = (async () => {
+      const response = await fetch(
+        `${parentOrigin}/auth/gameplay_token/${this.gameCloudId}`,
+        {
+          credentials: "include"
+        }
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to fetch gameplay token: ${response.status}`);
+      }
+      this.gameplayJwt = await response.text();
+      return this.gameplayJwt;
+    })().finally(() => {
+      if (this.gameplayJwtPromise === promise) {
+        this.gameplayJwtPromise = null;
+      }
+    });
+
+    this.gameplayJwtPromise = promise;
+    return promise;
+  }
+
+  /**
+   * Returns the cached gameplay JWT, awaiting the in-flight fetch if one is
+   * already running (e.g. from Convex's initial setAuth). Use this anywhere
+   * you need to authenticate a request outside of the Convex client.
+   */
+  async ensureGameplayJwt(): Promise<string> {
+    return this.getAuthToken();
   }
 
   /**
@@ -1139,14 +1178,18 @@ class WavedashSDK extends EventTarget {
   private setupSessionEndListeners(): void {
     // warm up the preflight cache
     const endSessionEndpoint = `${this.convexHttpUrl}/gameplay/end-session`;
-    fetch(endSessionEndpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.gameplayJwt}`
-      },
-      body: JSON.stringify({ _type: "warmup" })
-    }).catch(() => {});
+    void this.ensureGameplayJwt()
+      .then((jwt) =>
+        fetch(endSessionEndpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${jwt}`
+          },
+          body: JSON.stringify({ _type: "warmup" })
+        })
+      )
+      .catch(() => {});
 
     const endGameplaySession = (
       _event: PageTransitionEvent | BeforeUnloadEvent

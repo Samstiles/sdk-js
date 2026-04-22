@@ -116,10 +116,11 @@ export class FileSystemManager {
    */
   async listRemoteDirectory(path: string): Promise<RemoteFileMetadata[]> {
     const url = this.getRemoteStorageUrl(path) + "?list=true";
+    const jwt = await this.sdk.ensureGameplayJwt();
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${this.sdk.gameplayJwt}`
+        Authorization: `Bearer ${jwt}`
       }
     });
     if (!response.ok) {
@@ -219,10 +220,11 @@ export class FileSystemManager {
       return false;
     }
 
+    const jwt = await this.sdk.ensureGameplayJwt();
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${this.sdk.gameplayJwt}`
+        Authorization: `Bearer ${jwt}`
       }
     });
     if (!response.ok) {
