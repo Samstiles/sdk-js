@@ -1557,10 +1557,8 @@ export class P2PManager {
     }
 
     // Buffer provided - fill until full, leave remaining messages in queue.
-    // Inline the ring-buffer read instead of calling readMessageFromChannel
-    // twice (peek + consume) per message. One DataView over the queue
-    // buffer for all size-prefix reads, one memcpy per message into the
-    // output buffer, no intermediate view allocations.
+    // One DataView over the queue buffer for all size-prefix reads,
+    // one memcpy per message into the output buffer, no intermediate view allocations.
     const resultView = new DataView(
       buffer.buffer,
       buffer.byteOffset,
