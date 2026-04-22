@@ -116,7 +116,7 @@ class WavedashSDK extends EventTarget {
   logger: WavedashLogger;
   iframeMessenger: IFrameMessenger;
   p2pManager: P2PManager;
-  gameplayJwt: string | null = null;
+  private gameplayJwt: string | null = null;
   private gameplayJwtPromise: Promise<string> | null = null;
   ugcHost: string;
   uploadsHost: string;
