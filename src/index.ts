@@ -806,19 +806,15 @@ class WavedashSDK extends EventTarget {
   }
 
   /**
-   * Read one binary message from a specific P2P message channel
+   * Read one decoded P2P message from a specific channel.
+   * Engine builds (Unity/Godot) should use drainP2PChannelToBuffer for the
+   * hot path — it's batched and returns raw bytes without decode overhead.
    * @param appChannel - The channel to read from
-   * @returns To Game Engine: Uint8Array (zero-copy view, empty if no message available)
-   *          To JS: P2PMessage (null if no message available)
+   * @returns Decoded P2PMessage, or null if the channel has no pending messages.
    */
-  readP2PMessageFromChannel(
-    appChannel: number
-  ): Uint8Array | P2PMessage | null {
+  readP2PMessageFromChannel(appChannel: number): P2PMessage | null {
     // HOT PATH: direct call to avoid apiCallSync overhead (logger, formatResponse)
-    // Returns a zero-copy view, not a copy. We assume the engine copies on receipt.
-    // If we ever see race conditions, change to return a copy.
-    const returnRawBinary = this.engineInstance ? true : false;
-    return this.p2pManager.readMessageFromChannel(appChannel, returnRawBinary);
+    return this.p2pManager.readMessageFromChannel(appChannel);
   }
 
   /**
