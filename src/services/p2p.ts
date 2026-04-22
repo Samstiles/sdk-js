@@ -1468,56 +1468,47 @@ export class P2PManager {
     return this.outgoingMessageBuffer;
   }
 
-  // Read one message from the incoming queue for a specific channel
-  // Returns raw binary if rawBinary is true, otherwise returns decoded P2PMessage
-  // Game engines should use raw, JS games can use decoded P2PMessage
-  // If peek is true, returns the message without consuming it (leaves it in queue)
-  readMessageFromChannel(
-    appChannel: number,
-    rawBinary: boolean = true,
-    peek: boolean = false
-  ): Uint8Array | P2PMessage | null {
+  // Read the next message from a channel as a decoded P2PMessage.
+  // Returns null if the queue is empty or hasn't been created yet.
+  // Engine builds never call this — they use drainChannelToBuffer to
+  // minimize WASM<->JS boundary crossings. JS-only games use this directly.
+  readMessageFromChannel(appChannel: number): P2PMessage | null {
     this.ensureInitialized();
-    const returnRawBinary = rawBinary || this.sdk.engineInstance;
     const queue = this.channelQueues.get(appChannel);
-    if (!queue) {
-      return returnRawBinary ? new Uint8Array(0) : null;
-    }
+    if (!queue) return null;
 
-    if (queue.messageCount === 0) {
-      return returnRawBinary ? new Uint8Array(0) : null;
-    }
+    const view = this.readRawMessage(queue);
+    return view ? this.decodeBinaryMessage(view) : null;
+  }
+
+  // Internal helper: pull the next message's raw bytes from a queue as a
+  // zero-copy view and advance read pointers. Returns null if the queue is
+  // empty or the next slot's header is invalid (invalid slots are dropped —
+  // read pointers advance past them even when null is returned).
+  private readRawMessage(
+    queue: NonNullable<ReturnType<typeof this.channelQueues.get>>
+  ): Uint8Array | null {
+    if (queue.messageCount === 0) return null;
 
     const readOffset = queue.readIndex * this.MESSAGE_SIZE;
-
     const slotView = new DataView(queue.buffer, readOffset, this.MESSAGE_SIZE);
     const messageSize = slotView.getUint32(0, true);
-
     const maxMessageSize = this.MESSAGE_SIZE - this.MESSAGE_SLOT_HEADER_SIZE;
+
     if (messageSize === 0 || messageSize > maxMessageSize) {
-      // Invalid message, skip it (always consume invalid messages even when peeking)
       queue.readIndex = (queue.readIndex + 1) % this.QUEUE_SIZE;
       queue.messageCount--;
-      return returnRawBinary ? new Uint8Array(0) : null;
+      return null;
     }
 
-    // Create a view directly from the buffer (no copying needed for incoming messages)
-    const messageView = new Uint8Array(
+    const view = new Uint8Array(
       queue.buffer,
       readOffset + this.MESSAGE_SLOT_HEADER_SIZE,
       messageSize
     );
-
-    // Only advance queue pointers if not peeking
-    if (!peek) {
-      queue.readIndex = (queue.readIndex + 1) % this.QUEUE_SIZE;
-      queue.messageCount--;
-    }
-
-    // Engine gets the raw binary, JS gets the decoded P2PMessage
-    return returnRawBinary
-      ? messageView
-      : this.decodeBinaryMessage(messageView);
+    queue.readIndex = (queue.readIndex + 1) % this.QUEUE_SIZE;
+    queue.messageCount--;
+    return view;
   }
 
   // Drain all messages from a channel in one call (reduces WASM↔JS boundary crossings)
@@ -1541,14 +1532,10 @@ export class P2PManager {
       let totalSize = 0;
 
       while (queue.messageCount > 0) {
-        const msg = this.readMessageFromChannel(appChannel, true, false);
-        if (!msg || (msg instanceof Uint8Array && msg.length === 0)) {
-          // Invalid message was skipped, continue to next
-          continue;
-        }
-        const msgBytes = msg as Uint8Array;
-        messages.push(msgBytes);
-        totalSize += this.MESSAGE_SLOT_HEADER_SIZE + msgBytes.length;
+        const msg = this.readRawMessage(queue);
+        if (!msg) continue; // invalid slot was skipped
+        messages.push(msg);
+        totalSize += this.MESSAGE_SLOT_HEADER_SIZE + msg.length;
       }
 
       if (messages.length === 0) {
@@ -1569,42 +1556,52 @@ export class P2PManager {
       return result;
     }
 
-    // Buffer provided - fill until full, leave remaining messages in queue
+    // Buffer provided - fill until full, leave remaining messages in queue.
+    // One DataView over the queue buffer for all size-prefix reads,
+    // one memcpy per message into the output buffer, no intermediate view allocations.
     const resultView = new DataView(
       buffer.buffer,
       buffer.byteOffset,
       buffer.byteLength
     );
+    const queueView = new DataView(queue.buffer);
+    const maxMessageSize = this.MESSAGE_SIZE - this.MESSAGE_SLOT_HEADER_SIZE;
     let writePos = 0;
 
     while (queue.messageCount > 0) {
-      // Peek at next message to check if it fits
-      const peeked = this.readMessageFromChannel(appChannel, true, true);
-      if (!peeked || (peeked instanceof Uint8Array && peeked.length === 0)) {
-        // Empty result means either no messages or invalid message was skipped
-        // Continue to check while condition - it will exit if messageCount is 0
+      const readOffset = queue.readIndex * this.MESSAGE_SIZE;
+      const messageSize = queueView.getUint32(readOffset, true);
+
+      // Invalid message — drop and keep going
+      if (messageSize === 0 || messageSize > maxMessageSize) {
+        queue.readIndex = (queue.readIndex + 1) % this.QUEUE_SIZE;
+        queue.messageCount--;
         continue;
       }
-      const msgBytes = peeked as Uint8Array;
 
-      // Check if this message fits in remaining buffer space
-      const spaceNeeded = this.MESSAGE_SLOT_HEADER_SIZE + msgBytes.byteLength;
+      // Fits in remaining output space?
+      const spaceNeeded = this.MESSAGE_SLOT_HEADER_SIZE + messageSize;
       if (writePos + spaceNeeded > buffer.byteLength) {
-        // Buffer full, leave remaining messages in queue (message was only peeked, not consumed)
+        // Output buffer full; leave this message in the queue for next drain
         break;
       }
 
-      // Now consume the message (we already have the data from peek)
-      this.readMessageFromChannel(appChannel, true, false);
-
-      // Write to buffer
-      resultView.setUint32(writePos, msgBytes.length, true);
+      resultView.setUint32(writePos, messageSize, true);
       writePos += this.MESSAGE_SLOT_HEADER_SIZE;
-      buffer.set(msgBytes, writePos);
-      writePos += msgBytes.length;
+      buffer.set(
+        new Uint8Array(
+          queue.buffer,
+          readOffset + this.MESSAGE_SLOT_HEADER_SIZE,
+          messageSize
+        ),
+        writePos
+      );
+      writePos += messageSize;
+
+      queue.readIndex = (queue.readIndex + 1) % this.QUEUE_SIZE;
+      queue.messageCount--;
     }
 
-    // Return subarray containing only written data
     return buffer.subarray(0, writePos);
   }
 
