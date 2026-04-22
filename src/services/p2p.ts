@@ -37,6 +37,7 @@ export class P2PManager {
   private peerConnections = new Map<Id<"users">, RTCPeerConnection>();
   private reliableChannels = new Map<Id<"users">, RTCDataChannel>();
   private unreliableChannels = new Map<Id<"users">, RTCDataChannel>();
+  private failedPeers = new Set<Id<"users">>();
   private pendingIceCandidates = new Map<Id<"users">, RTCIceCandidateInit[]>();
   private connectionStateCheckInterval: ReturnType<typeof setInterval> | null =
     null;
@@ -386,6 +387,7 @@ export class P2PManager {
         this.reliableChannels.delete(userId);
         this.unreliableChannels.delete(userId);
         this.pendingIceCandidates.delete(userId);
+        this.failedPeers.delete(userId);
 
         // Remove from peer list
         delete this.currentConnection.peers[userId];
@@ -417,6 +419,17 @@ export class P2PManager {
     this.startConnectionStatePolling();
   }
 
+  private markPeerFailed(userId: Id<"users">): void {
+    this.failedPeers.add(userId);
+    this.updateConnectionState();
+  }
+  
+  private clearPeerFailure(userId: Id<"users">): void {
+    if (this.failedPeers.delete(userId)) {
+      this.updateConnectionState();
+    }
+  }
+
   // Periodically check peer connection states and update connection.state
   private startConnectionStatePolling(): void {
     // Clear any existing interval
@@ -437,30 +450,39 @@ export class P2PManager {
     }
   }
 
+
   private updateConnectionState(): void {
     if (!this.currentConnection) return;
 
     const peerIds = Object.keys(this.currentConnection.peers) as Id<"users">[];
     const previousState = this.currentConnection.state;
-
+  
     // No peers means disconnected
     if (peerIds.length === 0) {
       this.currentConnection.state = "disconnected";
     }
+
+    // Some peers have failed
+    else if (this.failedPeers.size > 0) {
+      this.currentConnection.state = "failed";
+    }
+
     // All peers are connected
     else if (this.allPeersConnected()) {
       this.currentConnection.state = "connected";
     }
-    // Have peers but not all connected
+
+    // Have peers but not all connected yet
     else {
       this.currentConnection.state = "connecting";
     }
-
+  
     // Log state changes
     if (previousState !== this.currentConnection.state) {
       const connectedCount = peerIds.filter((userId) =>
         this.isPeerReady(userId)
       ).length;
+  
       this.sdk.logger.debug(
         `P2P connection state: ${previousState} → ${this.currentConnection.state} ` +
           `(${connectedCount}/${peerIds.length} peers connected)`
@@ -792,8 +814,9 @@ export class P2PManager {
     const iceServers = await this.getIceServers();
     if (!iceServers) {
       this.sdk.logger.error(
-        `No ICE servers available for peer ${remoteUserId}`
+        `No ICE servers available for peer ${remoteUserId} - flagging this peer as a failure`
       );
+      this.markPeerFailed(remoteUserId);
       this.sdk.gameEventManager.notifyGame(
         WavedashEvents.P2P_CONNECTION_FAILED,
         {
@@ -911,6 +934,11 @@ export class P2PManager {
         this.sdk.logger.debug(
           `  Peer ${remoteUserId} fully connected, expecting ondatachannel events now...`
         );
+
+        this.clearPeerFailure(remoteUserId); // In case this user was previously marked as a failure, remove them from tracking
+      }
+      if (pc.connectionState === "failed") {
+        this.markPeerFailed(remoteUserId);
       }
     };
 
@@ -922,6 +950,9 @@ export class P2PManager {
         this.sdk.logger.debug(
           `  ICE connected to peer ${remoteUserId}, data channels should be available...`
         );
+
+        this.clearPeerFailure(remoteUserId); // In case this user was previously marked as a failure, remove them from tracking
+
         // Reset restart state on successful connection
         this.iceRestartAttempts.delete(remoteUserId);
         this.iceRestartInProgress.delete(remoteUserId);
@@ -991,6 +1022,7 @@ export class P2PManager {
       );
       const peer = this.currentConnection?.peers[remoteUserId];
       if (peer) {
+        this.markPeerFailed(remoteUserId);
         this.sdk.gameEventManager.notifyGame(
           WavedashEvents.P2P_CONNECTION_FAILED,
           {
@@ -1046,6 +1078,8 @@ export class P2PManager {
         `${type} data channel opened with peer ${remoteUserId}`
       );
 
+      this.clearPeerFailure(remoteUserId); // In case this user was previously marked as a failure, remove them from tracking
+
       // Check if this peer is now fully ready (both channels open if both are enabled)
       if (this.isPeerReady(remoteUserId)) {
         const peer = this.currentConnection?.peers[remoteUserId];
@@ -1073,6 +1107,7 @@ export class P2PManager {
       );
       const peer = this.currentConnection?.peers[remoteUserId];
       if (peer) {
+        this.markPeerFailed(remoteUserId);
         this.sdk.gameEventManager.notifyGame(
           WavedashEvents.P2P_CONNECTION_FAILED,
           {
@@ -1243,6 +1278,7 @@ export class P2PManager {
     this.pendingIceCandidates.clear();
     this.iceRestartAttempts.clear();
     this.iceRestartInProgress.clear();
+    this.failedPeers.clear();
 
     this.initializationInProgress = null;
     this.initializationLobbyId = null;
