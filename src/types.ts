@@ -235,7 +235,6 @@ export interface P2PMessage {
 
 // P2P Configuration
 export interface P2PConfig {
-  maxPeers: number;
   enableReliableChannel: boolean;
   enableUnreliableChannel: boolean;
   messageSize?: number; // Max bytes per message slot. Default: 2048. Must be > 44, capped at 65536.

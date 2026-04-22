@@ -22,7 +22,6 @@ import { api, P2P_SIGNALING_MESSAGE_TYPE, SDKUser } from "@wvdsh/types";
 
 // Default P2P configuration
 const DEFAULT_P2P_CONFIG: Required<P2PConfig> = {
-  maxPeers: 8,
   enableReliableChannel: true,
   enableUnreliableChannel: true,
   messageSize: 2048,
